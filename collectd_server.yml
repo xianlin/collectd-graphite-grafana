@@ -1,0 +1,61 @@
+---
+- import_playbook: collectd_client.yml  
+
+- hosts: all
+  become: yes
+  become_user: root
+  tasks:
+    - name: Add grafana repo for RHEL7
+      yum_repository:
+        name: grafana
+        description: Grafana YUM repo
+        file: grafana
+        baseurl: https://packages.grafana.com/oss/rpm
+        repo_gpgcheck: yes
+        gpgcheck: yes
+        gpgkey: https://packages.grafana.com/gpg.key
+        sslcacert: /etc/pki/tls/certs/ca-bundle.crt
+
+    - name: Install collectd aggregator/Relay packages
+      yum:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - python-carbon 
+        - graphite-web 
+        - grafana
+        - httpd
+
+    - name: Check if Graphite DB is synchronized
+      stat: path="/var/lib/graphite-web/graphite.db"
+      register: graphite_db
+
+    - name: Synchronize Graphite DB
+      become_user: apache
+      command: /usr/bin/graphite-manage syncdb --noinput
+      when: not graphite_db.stat.exists
+
+    - name: Ensure the various service are enabled and running
+      service:
+        name: "{{ item }}"
+        enabled: yes
+        state: started
+      loop:
+        - httpd
+        - carbon-cache 
+        - grafana-server
+
+    - name: Configure the Grafana web interface to allow access
+      lineinfile:
+        path: /etc/httpd/conf.d/graphite-web.conf
+        regexp: "Require local$"
+        line: "           Require all granted"
+        state: present
+      notify: restart grafana server
+
+  handlers:
+    - name: restart grafana server
+      service:
+        name: grafana-server
+        state: restarted
+
